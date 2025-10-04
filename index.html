@@ -1,0 +1,1398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- TITLE UPDATED: Changed to reflect 'los3rcore' theme -->
+    <title>los3rcore - The Y2K Social Sketchpad</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Tone.js for the retro sound effects and ambient music -->
+    <script src="https://unpkg.com/tone@14.7.77/build/Tone.js"></script>
+    <!-- Load Google Font for 2005 Digital Vibe (Press Start 2P) -->
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    
+    <!-- FIREBASE SDK IMPORTS -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, addDoc, setDoc, deleteDoc, onSnapshot, collection, query, orderBy, arrayUnion, arrayRemove, runTransaction, getDocs, where, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+
+        // Set Firebase Debug Log Level
+        setLogLevel('Debug');
+
+        // Global Firebase variables will be populated by Canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, db, auth;
+        let currentUserId = null;
+        let currentDisplayName = 'GUEST.USER';
+        
+        // Expose Firebase objects globally for the main script
+        window.firebase = {
+            init: async function() {
+                try {
+                    app = initializeApp(firebaseConfig);
+                    db = getFirestore(app);
+                    auth = getAuth(app);
+                    window.db = db;
+                    window.auth = auth;
+
+                    // Expose Firestore modules needed in the main script scope
+                    window.firebase.getFirebaseModules = () => ({
+                        getFirestore, collection, query, orderBy, addDoc, onSnapshot, runTransaction, doc, arrayUnion, arrayRemove, setDoc, deleteDoc, getDocs, where, getDoc
+                    });
+
+
+                    return new Promise((resolve) => {
+                        // Use onAuthStateChanged to ensure we have a user before proceeding
+                        onAuthStateChanged(auth, async (user) => {
+                            if (user) {
+                                currentUserId = user.uid;
+                                currentDisplayName = user.displayName || `USER-${user.uid.substring(0, 5)}`;
+                                
+                                // Check if user needs to set a display name
+                                if (!user.displayName || user.displayName.startsWith('USER-')) {
+                                    window.showDisplayNameModal();
+                                }
+                                
+                                window.updateAuthStatus(currentDisplayName, currentUserId);
+                                // The main script will handle setting up the gallery listener once auth is ready
+                                resolve({ userId: currentUserId, displayName: currentDisplayName });
+                            } else {
+                                // Attempt sign-in with custom token or anonymously
+                                try {
+                                    if (initialAuthToken) {
+                                        await signInWithCustomToken(auth, initialAuthToken);
+                                    } else {
+                                        await signInAnonymously(auth);
+                                    }
+                                } catch (e) {
+                                    console.error("Firebase Auth Error:", e);
+                                }
+                            }
+                        });
+
+                    });
+
+                } catch (error) {
+                    console.error("Firebase Initialization Failed:", error);
+                }
+            },
+            updateDisplayName: async function(newDisplayName) {
+                if (auth.currentUser) {
+                    await updateProfile(auth.currentUser, { displayName: newDisplayName });
+                    currentDisplayName = newDisplayName;
+                    window.updateAuthStatus(currentDisplayName, currentUserId);
+                }
+            },
+            getUserId: () => currentUserId,
+            getDisplayName: () => currentDisplayName,
+            getAppId: () => appId
+        };
+
+        // Initialize Firebase when the script loads
+        window.firebase.init().then(({ userId }) => {
+            if (userId) {
+                // Now that we have a user ID, set up the real-time gallery listener
+                window.setupGalleryAndFollowingListener(appId, userId);
+            }
+        });
+    </script>
+    
+    <style>
+        /* --- Neon Color Definitions --- */
+        :root {
+            --neon-pink: #FF00FF;
+            --neon-blue: #00FFFF;
+            --neon-purple: #8A2BE2;
+            --dark-background: #100020; /* Deep Violet/Black */
+
+            /* --- KEYBOARD VARIABLES (Customizable) --- */
+            --keyboard-bg-main: #333333;
+            --keyboard-key-active: #FF00FF; /* Neon Pink */
+            --keyboard-key-inactive: #C0C0C0;
+            --keyboard-border: #666666;
+            --keyboard-text: #000000;
+        }
+
+        /* Set initial keyboard colors */
+        .keyboard-wrapper {
+            --kb-primary-color: var(--keyboard-key-inactive);
+            --kb-secondary-color: var(--keyboard-key-active);
+        }
+        /* Style for the current user's preferred keyboard colors */
+        [data-kb-primary] {
+             --kb-primary-color: var(--keyboard-key-inactive);
+        }
+        [data-kb-secondary] {
+             --kb-secondary-color: var(--keyboard-key-active);
+        }
+        
+        /* Custom Styles for the High-Contrast Neon Theme */
+        body {
+            /* GALAXY BACKGROUND: Deep black with tiled pixel stars */
+            background-color: var(--dark-background); 
+            background-image: 
+                radial-gradient(1px 1px at 15px 15px, #00FFFF80, transparent),
+                radial-gradient(1px 1px at 70px 40px, #00FFFF80, transparent),
+                radial-gradient(1px 1px at 30px 85px, #00FFFF80, transparent),
+                radial-gradient(2px 2px at 50px 50px, #FF00FF80, transparent),
+                radial-gradient(2px 2px at 90px 20px, #8A2BE280, transparent);
+            
+            background-size: 100px 100px;
+            
+            font-family: 'Press Start 2P', cursive;
+            color: #FFFFFF;
+            cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><text x='5' y='30' style='font-size: 30px; fill: var(--neon-pink);'>▶</text></svg>") 15 15, auto;
+        }
+
+        /* Y2K "Glitch" / "Wipe" Title Effect */
+        .y2k-title {
+            text-shadow: 
+                -2px -2px 0 var(--neon-blue), 
+                2px 2px 0 var(--neon-pink),
+                0 0 10px var(--neon-blue);
+            letter-spacing: 3px;
+        }
+
+        /* Tool Card Style - Faux CRT Look */
+        .tool-card {
+            background-color: rgba(0, 0, 0, 0.4);
+            border: 2px solid var(--neon-blue);
+            color: var(--neon-blue);
+            box-shadow: 0 0 5px var(--neon-pink), 0 0 10px var(--neon-blue);
+            transition: transform 0.1s ease-out, box-shadow 0.1s ease-out;
+        }
+        .tool-card:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 0 10px var(--neon-pink), 0 0 20px var(--neon-blue);
+        }
+        .tool-card.active {
+            border-color: var(--neon-pink);
+            background-color: rgba(255, 0, 255, 0.2);
+            transform: translateY(0);
+            box-shadow: 0 0 5px #FFFF00 inset; 
+        }
+
+        /* --- CD Floating Animation --- */
+        @keyframes float_cd {
+            0% { transform: translateY(0) rotate(0deg); }
+            50% { transform: translateY(-8px) rotate(5deg); }
+            100% { transform: translateY(0) rotate(0deg); }
+        }
+        
+        #cd-button {
+            animation: float_cd 4s ease-in-out infinite;
+            cursor: pointer;
+            transition: transform 0.2s; 
+        }
+        #cd-button:hover {
+            transform: scale(1.05);
+        }
+        
+        /* --- NEW: Neon Upload Text Style --- */
+        #cd-text {
+            color: #00FF00; /* Neon Green */
+            text-shadow: 
+                0 0 5px #00FF00, 
+                0 0 10px #00FF00, 
+                0 0 20px rgba(0, 255, 0, 0.5);
+        }
+        /* --- END NEW --- */
+
+        /* Canvas Style */
+        #drawingCanvas {
+            touch-action: none; 
+            background-color: #FFFFFF;
+            border: 8px solid var(--neon-pink);
+            box-shadow: 0 0 30px var(--neon-pink), 0 0 60px var(--neon-blue);
+            image-rendering: pixelated;
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        /* Chat Modal Styles */
+        #chat-modal {
+            background-color: rgba(16, 0, 32, 0.95);
+            z-index: 200;
+            backdrop-filter: blur(8px);
+        }
+        
+        /* Profile Modal Styles (NEW) */
+        #profile-modal {
+            background-color: rgba(16, 0, 32, 0.95);
+            z-index: 200;
+            backdrop-filter: blur(8px);
+        }
+
+        /* Digital Keyboard Styles */
+        .digital-keyboard {
+            background-color: var(--keyboard-bg-main);
+            border: 3px solid var(--keyboard-border);
+            padding: 8px;
+            box-shadow: 0 0 10px var(--kb-secondary-color);
+            max-width: 100%;
+        }
+        .key-row {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 4px;
+        }
+        .key {
+            flex: 1 1 auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 36px;
+            font-size: 10px; 
+            font-weight: bold;
+            border: 2px solid var(--keyboard-border);
+            border-radius: 2px;
+            cursor: pointer;
+            transition: background-color 0.05s;
+            text-shadow: 1px 1px 0 rgba(255, 255, 255, 0.2);
+            /* Dynamic Colors */
+            background-color: var(--kb-primary-color);
+            color: var(--keyboard-text);
+        }
+        .key:active, .key.active {
+            background-color: var(--kb-secondary-color);
+            box-shadow: 0 0 5px var(--kb-secondary-color);
+            color: var(--dark-background);
+        }
+
+        .key-num, .key-q { flex: 1; }
+        .key-caps { flex: 1.5; }
+        .key-shift { flex: 2; }
+        .key-enter { flex: 2; background-color: var(--kb-secondary-color); }
+        .key-backspace { flex: 1.5; }
+        .key-space { flex: 7; }
+
+        /* Chat Scrollbar */
+        #message-list {
+            max-height: 40vh;
+            overflow-y: auto;
+            padding: 1rem;
+            border: 2px solid var(--neon-blue);
+            background-color: rgba(0, 0, 0, 0.3);
+            scrollbar-color: var(--neon-pink) var(--dark-background);
+            scrollbar-width: thin;
+        }
+        .message-bubble {
+            padding: 0.5rem 0.75rem;
+            border-radius: 8px;
+            max-width: 80%;
+            margin-bottom: 0.5rem;
+        }
+        .message-mine {
+            background-color: var(--neon-purple);
+            margin-left: auto;
+            border-bottom-right-radius: 0;
+            text-align: right;
+        }
+        .message-theirs {
+            background-color: var(--neon-blue);
+            margin-right: auto;
+            border-bottom-left-radius: 0;
+            text-align: left;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8 min-h-screen">
+    
+    <!-- Display Name/Login Modal Overlay -->
+    <div id="name-modal" class="fixed inset-0 hidden items-center justify-center p-4">
+        <div class="tool-card p-6 w-full max-w-md text-center">
+            <h2 class="text-3xl y2k-title mb-4">W3LC0M3, N3W US3R</h2>
+            <p class="text-sm mb-6 text-white">Your digital identity needs a label.</p>
+            <input type="text" id="displayNameInput" placeholder="Enter your display name" maxlength="20" class="w-full p-3 mb-4 bg-black text-white border-2 border-neon-blue font-mono text-base focus:border-neon-pink focus:outline-none rounded-md">
+            <button id="saveDisplayNameButton" class="w-full tool-card p-3 rounded-lg text-lg font-bold bg-green-600 hover:bg-green-700">
+                L0G-IN | S3T N4M3
+            </button>
+        </div>
+    </div>
+    
+    <!-- CHAT MODAL OVERLAY -->
+    <div id="chat-modal" class="fixed inset-0 hidden items-center justify-center p-4">
+        <div class="tool-card p-4 w-full max-w-3xl" style="height: 90vh; display: flex; flex-direction: column;">
+            
+            <!-- Chat Header -->
+            <div class="flex justify-between items-center border-b-2 border-white pb-3 mb-4">
+                <h2 class="text-2xl text-white" style="text-shadow: 0 0 5px var(--neon-pink);">
+                    M3SSAG3 >> <span id="chat-recipient-name">Anon</span>
+                </h2>
+                <button id="close-chat-button" class="tool-card p-2 rounded-full text-lg font-bold bg-red-600 hover:bg-red-700">
+                    X
+                </button>
+            </div>
+
+            <!-- Message List -->
+            <div id="message-list" class="flex-grow mb-4 flex flex-col gap-2">
+                <!-- Messages will be rendered here -->
+            </div>
+
+            <!-- Input Display -->
+            <div class="mb-4">
+                <input id="chat-input" type="text" readonly placeholder="Type your message with the keyboard below..." 
+                       class="w-full p-3 bg-black text-white border-2 border-neon-blue font-mono text-base rounded-md" style="height: 48px;">
+            </div>
+
+            <!-- Digital Keyboard -->
+            <div id="digital-keyboard" class="keyboard-wrapper">
+                <!-- Keyboard keys generated by JS -->
+            </div>
+        </div>
+    </div>
+    
+    <!-- PROFILE MODAL OVERLAY (NEW FEATURE) -->
+    <div id="profile-modal" class="fixed inset-0 hidden items-center justify-center p-4">
+        <div class="tool-card p-4 w-full max-w-4xl" style="height: 90vh; display: flex; flex-direction: column;">
+            
+            <!-- Profile Header -->
+            <div class="flex justify-between items-center border-b-2 border-white pb-3 mb-4">
+                <h2 class="text-3xl y2k-title text-white">
+                    //<span id="profile-display-name">Anon's</span>-L0GS
+                </h2>
+                <button id="close-profile-button" class="tool-card p-2 rounded-full text-lg font-bold bg-red-600 hover:bg-red-700">
+                    X
+                </button>
+            </div>
+
+            <!-- Profile Content -->
+            <div id="profile-content" class="flex-grow overflow-y-auto p-2">
+                <p class="text-sm text-gray-400 mb-4">D1G1T4L ID: <span id="profile-user-id">0x0000...</span></p>
+                
+                <h3 class="text-xl text-white mb-2 border-b border-gray-500 pb-1" style="text-shadow: 0 0 3px var(--neon-blue);">
+                    SK3TCH3S (<span id="sketch-count">0</span>)
+                </h3>
+                <div id="profile-sketches" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-6">
+                    <p class="text-center text-gray-500 col-span-full" id="profile-sketches-loading">L04D1NG 5K3TCH3S...</p>
+                </div>
+
+                <h3 class="text-xl text-white mb-2 border-b border-gray-500 pb-1" style="text-shadow: 0 0 3px var(--neon-pink);">
+                    F0LL0W1NG (<span id="following-count">0</span>)
+                </h3>
+                <div id="profile-following-list" class="flex flex-wrap gap-2 text-sm text-white">
+                    <p class="text-center text-gray-500" id="profile-following-loading">L04D1NG F0LL0W1NG...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Floating Neon Decorations -->
+    <div id="y2k-decorations">
+        <!-- SVG Decorations from previous version -->
+        <svg id="pixel-mean-girl" class="decoration neon-star" viewBox="0 0 100 100" title="Digital Star Character">
+            <polygon class="svg-neon" points="50,5 61,39 98,39 69,61 80,95 50,73 20,95 31,61 2,39 39,39" stroke="var(--neon-blue)" stroke-width="2"/>
+        </svg>
+        <svg class="decoration neon-diamond" viewBox="0 0 100 100" title="Digital Diamond">
+            <polygon class="svg-neon" points="50,0 100,50 50,100 0,50" stroke="var(--neon-blue)" stroke-width="3"/>
+        </svg>
+        <svg class="decoration neon-glitch" viewBox="0 0 100 100" title="Glitch Grid">
+            <rect x="5" y="5" width="20" height="20" class="svg-neon"/>
+            <rect x="35" y="35" width="30" height="30" class="svg-neon"/>
+            <rect x="75" y="75" width="20" height="20" class="svg-neon"/>
+            <rect x="5" y="75" width="10" height="10" class="svg-neon"/>
+        </svg>
+    </div>
+    
+    <!-- H1 TITLE UPDATED -->
+    <h1 class="y2k-title text-4xl sm:text-5xl lg:text-6xl text-center mb-6 p-2">
+        L0S3RC0R3
+    </h1>
+    
+    <!-- CREATOR MESSAGE BOX (NEW) -->
+    <div class="max-w-4xl mx-auto tool-card p-4 mb-8 text-center" style="border-color: var(--neon-pink); background-color: rgba(255, 0, 255, 0.1);">
+        <p class="text-sm sm:text-base text-white" style="line-height: 1.5; font-weight: bold; text-shadow: 0 0 5px var(--neon-pink);">
+            HIIII!! I'm the creator of this website my insta id is loser.daughter.core without the dots! (: you can vent here about anything hope you all love it!!! I'm only 14 life is not good but I try to live so can you! I'm proud of you! (;
+        </p>
+    </div>
+
+    <main class="max-w-7xl mx-auto flex flex-col gap-6">
+
+        <!-- Top Row: Control Panel and Canvas -->
+        <div class="flex flex-col lg:flex-row gap-6">
+            
+            <!-- Control Panel (Left/Top) -->
+            <div class="lg:w-1/4 w-full p-4 rounded-xl tool-card border-4 border-white h-full bg-opacity-70">
+                <h2 class="text-2xl text-white mb-4 border-b-2 border-white pb-2" style="text-shadow: 0 0 5px var(--neon-pink);">~ T00LZ | C0NTR0L ~</h2>
+
+                <!-- Authentication Status -->
+                <div class="mb-6 border-b-2 border-white pb-4">
+                    <h3 class="text-xl text-white mb-2" style="text-shadow: 0 0 5px var(--neon-blue);">D1G1T4L ID:</h3>
+                    <p class="text-sm break-words text-neon-pink mb-1" id="auth-display-name">Loading...</p>
+                    <p class="text-xs break-words text-gray-400" id="auth-user-id">ID: 0x0000...</p>
+                    <button id="openNameModalButton" class="w-full tool-card p-2 mt-2 rounded-lg text-xs font-bold" style="background-color: var(--neon-purple); border-color: var(--neon-purple);">
+                        S3T D1SPLAY N4M3
+                    </button>
+                </div>
+
+                <!-- Keyboard Customization (NEW) -->
+                <div class="mb-6 border-b-2 border-white pb-4">
+                    <h3 class="text-xl text-white mb-2" style="text-shadow: 0 0 5px var(--neon-purple);">K3YB04RD | C0L0R:</h3>
+                    <label for="kbColorPicker" class="block text-sm font-bold text-white mb-1">
+                        PR1M4RY C0L0UR
+                    </label>
+                    <input type="color" id="kbColorPicker" value="#FF00FF" class="w-full h-10 rounded-lg mb-2 tool-card" title="Keyboard Primary Color">
+                    <button id="saveKbColorButton" class="w-full tool-card p-2 rounded-lg text-xs font-bold bg-yellow-600 hover:bg-yellow-700">
+                        S4V3 C0L0R
+                    </button>
+                </div>
+
+                <!-- Drawing Controls (Brush, Color, etc.) -->
+                <div id="drawing-controls">
+                    <!-- Music Player (CD) & Ambient Music -->
+                    <div class="mb-6 border-b-2 border-white pb-4">
+                        <h3 class="text-xl text-white mb-2" style="text-shadow: 0 0 5px var(--neon-blue);">MÚSIC | PL4Y3R:</h3>
+                        <button id="music-toggle" class="w-full tool-card p-3 rounded-lg text-lg font-bold bg-green-500 mb-2">
+                            <span id="music-status">▶️ 4MBI3NT 0N</span>
+                        </button>
+                        
+                        <!-- Custom Upload - INCREASED SIZE AND NEON TEXT -->
+                        <label id="cd-button" for="audioUpload" 
+                            class="block w-32 h-32 rounded-full mx-auto my-4 relative flex items-center justify-center">
+                            <!-- Increased size to text-8xl -->
+                            <span class="text-8xl absolute text-pink-700" style="text-shadow: 1px 1px 0 var(--neon-blue);">💿</span>
+                            <!-- Increased size and applied neon green style via ID -->
+                            <span class="absolute text-base font-bold text-black" id="cd-text">UP.L0AD</span>
+                        </label>
+                        <input type="file" id="audioUpload" accept="audio/*" class="hidden">
+                        <audio id="bgMusic" loop></audio>
+                    </div>
+
+                    <!-- Brush Size/Type Selection -->
+                    <div class="mb-6">
+                        <h3 class="text-xl text-white mb-2" style="text-shadow: 0 0 5px var(--neon-blue);">BRU5H | M0D3:</h3>
+                        <div class="mb-4">
+                            <label for="sizeSlider" class="block text-sm font-bold text-white mb-1">
+                                PIXEL WIDTH: <span id="currentSizeDisplay">1</span>px
+                            </label>
+                            <input type="range" id="sizeSlider" min="1" max="20" value="1" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer" title="Brush Size">
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <button class="brush-tool tool-card p-3 rounded-lg text-sm font-bold tool-card-text active" data-mode="normal" data-size="1" data-cap="round">PENCIL (1px)</button>
+                            <button class="brush-tool tool-card p-3 rounded-lg text-sm font-bold tool-card-text" data-mode="blend" data-size="5" data-cap="round">BL3ND M0D3 (Lighter)</button>
+                            <button class="brush-tool tool-card p-3 rounded-lg text-sm font-bold tool-card-text" data-mode="glitch_pen" data-size="2" data-cap="round">GL1TCH P3N (2px)</button>
+                            <button class="brush-tool tool-card p-3 rounded-lg text-sm font-bold tool-card-text bg-red-800" data-mode="erase" data-size="10" data-cap="square">3R4S3R (10px)</button>
+                        </div>
+                    </div>
+
+                    <!-- Color Wheel and Presets -->
+                    <div class="mb-6">
+                        <h3 class="text-xl text-white mb-2" style="text-shadow: 0 0 5px var(--neon-purple);">C0L0UR | WH33L:</h3>
+                        <input type="color" id="colorPicker" value="#FF00FF" class="w-full h-12 rounded-lg mb-2 tool-card" title="Color Wheel">
+                    </div>
+                    
+                    <!-- Undo/Redo Controls -->
+                    <div class="mb-6 border-t-2 border-white pt-4">
+                        <h3 class="text-xl text-white mb-2" style="text-shadow: 0 0 5px var(--neon-pink);">H1ST0RY | C0NTR0L:</h3>
+                        <div class="flex gatp-2">
+                            <button id="undoButton" disabled class="flex-1 tool-card p-3 rounded-lg text-lg font-bold opacity-50">↩️ UND0</button>
+                            <button id="redoButton" disabled class="flex-1 tool-card p-3 rounded-lg text-lg font-bold opacity-50">↪️ R3D0</button>
+                        </div>
+                    </div>
+
+                    <!-- SAVE & CLEAR -->
+                    <div class="flex gap-2 mb-4">
+                        <button id="saveGalleryButton" class="flex-1 tool-card bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-lg text-lg font-bold" style="border-color: #00BFFF;">
+                            💾 S4V3 T0 G4LL3RY
+                        </button>
+                    </div>
+                    <div>
+                        <button id="clearButton" class="w-full tool-card bg-red-600 hover:bg-red-700 text-white p-3 rounded-lg text-lg font-bold" style="border-color: #FF4500;">
+                            🗑️ CL34R B04RD
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Drawing Canvas (Right/Bottom) -->
+            <div class="lg:w-3/4 w-full h-[70vh] lg:h-[80vh] flex justify-center items-center">
+                <canvas id="drawingCanvas"></canvas>
+            </div>
+        </div>
+
+        <!-- Gallery Section (New Social Feed) -->
+        <div class="w-full p-4 rounded-xl tool-card border-4 border-white h-full bg-opacity-70 mt-6">
+            <h2 class="text-2xl text-white mb-4 border-b-2 border-white pb-2" style="text-shadow: 0 0 5px var(--neon-purple);">~ L0V3 N3TW0RK | G4LL3RY ~</h2>
+            
+            <div id="gallery-feed" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                <p id="gallery-loading" class="col-span-full text-center text-lg text-gray-400">CONNECTING TO L0V3 N3TW0RK...</p>
+            </div>
+        </div>
+    </main>
+
+    <script type="module">
+        // Import Firebase functions made available globally by the setup script
+        const { getFirestore, collection, query, orderBy, addDoc, onSnapshot, runTransaction, doc, arrayUnion, arrayRemove, setDoc, deleteDoc, getDocs, where, getDoc } = window.firebase ? window.firebase.getFirebaseModules() : {};
+
+        // --- Global Variables and Tone.js Setup ---
+        const canvas = document.getElementById('drawingCanvas');
+        const ctx = canvas.getContext('2d');
+        const colorPicker = document.getElementById('colorPicker');
+        const clearButton = document.getElementById('clearButton');
+        const brushTools = document.querySelectorAll('.brush-tool');
+        const sizeSlider = document.getElementById('sizeSlider');
+        const currentSizeDisplay = document.getElementById('currentSizeDisplay');
+        const undoButton = document.getElementById('undoButton');
+        const redoButton = document.getElementById('redoButton');
+        const saveGalleryButton = document.getElementById('saveGalleryButton');
+        const galleryFeed = document.getElementById('gallery-feed');
+        const displayNameInput = document.getElementById('displayNameInput');
+        const saveDisplayNameButton = document.getElementById('saveDisplayNameButton');
+        const nameModal = document.getElementById('name-modal');
+        const openNameModalButton = document.getElementById('openNameModalButton');
+        const authDisplayName = document.getElementById('auth-display-name');
+        const authUserId = document.getElementById('auth-user-id');
+        const musicToggleButton = document.getElementById('music-toggle');
+        const musicStatus = document.getElementById('music-status'); // <--- FIX: Added musicStatus declaration
+        const kbColorPicker = document.getElementById('kbColorPicker');
+        const saveKbColorButton = document.getElementById('saveKbColorButton');
+        const chatModal = document.getElementById('chat-modal');
+        const closeChatButton = document.getElementById('close-chat-button');
+        const chatRecipientName = document.getElementById('chat-recipient-name');
+        const messageList = document.getElementById('message-list');
+        const chatInput = document.getElementById('chat-input');
+        const digitalKeyboardContainer = document.getElementById('digital-keyboard');
+
+        // NEW Profile Modal Elements
+        const profileModal = document.getElementById('profile-modal');
+        const closeProfileButton = document.getElementById('close-profile-button');
+        const profileDisplayName = document.getElementById('profile-display-name');
+        const profileUserId = document.getElementById('profile-user-id');
+        const profileSketches = document.getElementById('profile-sketches');
+        const sketchCount = document.getElementById('sketch-count');
+        const followingCount = document.getElementById('following-count');
+        const profileFollowingList = document.getElementById('profile-following-list');
+        const profileSketchesLoading = document.getElementById('profile-sketches-loading');
+        const profileFollowingLoading = document.getElementById('profile-following-loading');
+
+
+        // History State
+        const MAX_HISTORY = 15; 
+        let undoStack = [];
+        let redoStack = [];
+
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+
+        // Low Resolution Constants
+        const LOW_RES_WIDTH = 640;
+        const LOW_RES_HEIGHT = 400;
+        let scaleX = 1;
+        let scaleY = 1;
+
+        // Drawing State
+        let currentColor = colorPicker.value;
+        let currentBrushSize = parseInt(sizeSlider.value); 
+        let currentLineCap = 'round';
+        let currentDrawingMode = 'normal';
+
+        const canvasBgColor = '#FFFFFF'; 
+        const GLITCH_JITTER = 3; 
+        let userFollowing = new Set(); 
+        let unsubscribeChat = null;
+        let activeChat = {
+            chatId: null,
+            recipientId: null,
+            recipientName: null
+        };
+        let keyboardState = {
+            isCaps: false,
+            isShift: false
+        };
+        let currentKeyboardColor = '#FF00FF';
+
+        // Tone.js Synth Setup (Y2K BEEP/BOOP)
+        const synth = new Tone.MembraneSynth().toDestination();
+        const interactionSynth = new Tone.Synth({ oscillator: { type: "square" }, envelope: { attack: 0.005, decay: 0.1, sustain: 0.0, release: 0.05 }}).toDestination();
+        const bgSynth = new Tone.PolySynth(Tone.Synth, { oscillator: { type: "sawtooth" }, envelope: { attack: 2, decay: 1, sustain: 0.5, release: 2 }}).toDestination();
+        bgSynth.volume.value = -12; 
+        let bgLoop;
+
+        // Function to play sound on key press
+        function playKeySound(freq = 1100) { if (Tone.context.state === 'running') { interactionSynth.triggerAttackRelease(freq, "32n"); } }
+        function playInteractionSound(freq = 880) { if (Tone.context.state === 'running') { interactionSynth.triggerAttackRelease(freq, "8n"); } }
+
+
+        // --- Keyboard Customization Logic ---
+
+        /**
+         * Loads the user's saved keyboard color from Firestore.
+         */
+        const loadKeyboardColor = async (userId, appId) => {
+            const db = window.db;
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/settings/keyboard`);
+            try {
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    const color = docSnap.data().primaryColor;
+                    if (color) {
+                        currentKeyboardColor = color;
+                        kbColorPicker.value = color;
+                        document.documentElement.style.setProperty('--kb-secondary-color', color);
+                    }
+                } else {
+                    // Save default color if no setting exists
+                    await saveKeyboardColor(kbColorPicker.value);
+                }
+            } catch (e) {
+                console.warn("Failed to load keyboard color, using default:", e);
+            }
+        };
+
+        /**
+         * Saves the user's preferred keyboard color to Firestore.
+         */
+        const saveKeyboardColor = async (color) => {
+            const db = window.db;
+            const userId = window.firebase.getUserId();
+            const appId = window.firebase.getAppId();
+            if (!userId) return;
+
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/settings/keyboard`);
+            try {
+                await setDoc(docRef, { primaryColor: color }, { merge: true });
+                currentKeyboardColor = color;
+                document.documentElement.style.setProperty('--kb-secondary-color', color);
+                playInteractionSound(1600);
+            } catch (e) {
+                console.error("Error saving keyboard color:", e);
+            }
+        };
+
+        // Event listeners for color picker
+        kbColorPicker.addEventListener('input', (e) => {
+             // Temporarily update CSS variable on input for live preview
+            document.documentElement.style.setProperty('--kb-secondary-color', e.target.value);
+            playInteractionSound(900);
+        });
+
+        saveKbColorButton.addEventListener('click', () => {
+            saveKeyboardColor(kbColorPicker.value);
+        });
+
+
+        // --- Digital Keyboard Layout & Logic ---
+
+        const keyboardLayout = [
+            [{key: '~', shift: '`', class: 'key-num'}, {key: '1', shift: '!'}, {key: '2', shift: '@'}, {key: '3', shift: '#'}, {key: '4', shift: '$'}, {key: '5', shift: '%'}, {key: '6', shift: '^'}, {key: '7', shift: '&'}, {key: '8', shift: '*'}, {key: '9', shift: '('}, {key: '0', shift: ')'}, {key: '-', shift: '_'}, {key: '=', shift: '+'}, {key: 'DEL', special: true, class: 'key-backspace key-enter'}],
+            [{key: 'TAB', special: true, class: 'key-caps'}, {key: 'q'}, {key: 'w'}, {key: 'e'}, {key: 'r'}, {key: 't'}, {key: 'y'}, {key: 'u'}, {key: 'i'}, {key: 'o'}, {key: 'p'}, {key: '[', shift: '{'}, {key: ']', shift: '}'}, {key: '\\', shift: '|', class: 'key-caps'} , {key: 'ENTER', special: true, class: 'key-enter', icon: '⮐'}],
+            [{key: 'CAPS', special: true, class: 'key-shift'}, {key: 'a'}, {key: 's'}, {key: 'd'}, {key: 'f'}, {key: 'g'}, {key: 'h'}, {key: 'j'}, {key: 'k'}, {key: 'l'}, {key: ';', shift: ':'}, {key: "'", shift: '"'}],
+            [{key: 'SHIFT', special: true, class: 'key-shift', id: 'shift-key'}, {key: 'z'}, {key: 'x'}, {key: 'c'}, {key: 'v'}, {key: 'b'}, {key: 'n'}, {key: 'm'}, {key: ',', shift: '<'}, {key: '.', shift: '>'}, {key: '/', shift: '?'}, {key: 'SPACE', special: true, class: 'key-space', icon: '―'}],
+            // Added symbols row for completeness based on visual
+            [{key: 'L1', special: true, class: 'key-caps', icon: '▤'}, {key: 'L2', special: true, class: 'key-caps', icon: '☰'}, {key: '<', shift: '>', class: 'key-num'}, {key: '>', shift: '<', class: 'key-num'}, {key: '(', shift: ')', class: 'key-num'}, {key: ')', shift: '(', class: 'key-num'}, {key: '?', shift: '!', class: 'key-num'}, {key: '!', shift: '?', class: 'key-num'}, {key: ':', shift: ';', class: 'key-num'}, {key: ';', shift: ':', class: 'key-num'}, {key: '_', shift: '-', class: 'key-num'}, {key: '-', shift: '_', class: 'key-num'}, {key: '+', shift: '=', class: 'key-num'}, {key: '=', shift: '+', class: 'key-num'}]
+        ];
+
+        /**
+         * Renders the digital keyboard structure.
+         */
+        function renderKeyboard() {
+            digitalKeyboardContainer.innerHTML = '';
+            keyboardLayout.forEach(rowKeys => {
+                const row = document.createElement('div');
+                row.className = 'key-row';
+                
+                rowKeys.forEach(keyData => {
+                    const keyElement = document.createElement('button');
+                    keyElement.className = `key ${keyData.class || 'key-q'}`;
+                    keyElement.textContent = keyData.icon || keyData.key;
+                    keyElement.dataset.key = keyData.key;
+                    if (keyData.shift) keyElement.dataset.shift = keyData.shift;
+
+                    keyElement.addEventListener('click', () => handleKey(keyData, keyElement));
+                    row.appendChild(keyElement);
+                });
+                digitalKeyboardContainer.appendChild(row);
+            });
+            updateShiftCapsStyles(); // Apply initial styles
+        }
+
+        /**
+         * Handles virtual key press logic.
+         */
+        function handleKey(keyData, element) {
+            playKeySound(); 
+            let text = chatInput.value;
+            let key = keyData.key;
+            let char = key;
+
+            // Determine the character to output
+            if (key.length === 1 && key.match(/[a-z]/i)) {
+                // Handle letters based on CAPS lock and SHIFT key state
+                const shouldBeUpperCase = keyboardState.isCaps !== keyboardState.isShift;
+                char = shouldBeUpperCase ? key.toUpperCase() : key.toLowerCase();
+            } else if (keyData.shift && keyboardState.isShift) {
+                // Handle symbols with shift
+                char = keyData.shift;
+            } else {
+                // Default character
+                char = key;
+            }
+
+
+            switch (key) {
+                case 'DEL':
+                    text = text.substring(0, text.length - 1);
+                    break;
+                case 'SPACE':
+                    text += ' ';
+                    break;
+                case 'ENTER':
+                    sendMessage(text);
+                    text = ''; // Clear after sending
+                    break;
+                case 'CAPS':
+                    keyboardState.isCaps = !keyboardState.isCaps;
+                    break;
+                case 'SHIFT':
+                    keyboardState.isShift = !keyboardState.isShift;
+                    break;
+                case 'TAB':
+                case 'L1':
+                case 'L2':
+                    // Ignore special non-text keys
+                    break;
+                default:
+                    // Only append single characters
+                    if (key.length === 1 || (keyData.shift && keyboardState.isShift)) {
+                         text += char;
+                    }
+                    // If shift was active for a single character press, turn it off
+                    if (keyboardState.isShift && key !== 'SHIFT' && key !== 'CAPS' && key !== 'ENTER' && key !== 'DEL') {
+                        keyboardState.isShift = false;
+                    }
+            }
+            
+            chatInput.value = text;
+            updateShiftCapsStyles();
+        }
+
+        /**
+         * Updates the visual state of CAPS and SHIFT keys.
+         */
+        function updateShiftCapsStyles() {
+            const capsKey = digitalKeyboardContainer.querySelector('[data-key="CAPS"]');
+            const shiftKey = digitalKeyboardContainer.querySelector('[data-key="SHIFT"]');
+            
+            if (capsKey) capsKey.classList.toggle('active', keyboardState.isCaps);
+            if (shiftKey) shiftKey.classList.toggle('active', keyboardState.isShift);
+
+            // Update all keys for text display
+            digitalKeyboardContainer.querySelectorAll('.key').forEach(keyElement => {
+                const key = keyElement.dataset.key;
+                const shift = keyElement.dataset.shift;
+                
+                if (keyElement.dataset.special) return;
+
+                let displayChar = key;
+
+                if (key.length === 1 && key.match(/[a-z]/i)) {
+                    // Letters: Caps XOR Shift determines case
+                    const shouldBeUpperCase = keyboardState.isCaps !== keyboardState.isShift;
+                    displayChar = shouldBeUpperCase ? key.toUpperCase() : key.toLowerCase();
+                } else if (shift) {
+                    // Symbols with shift
+                    displayChar = keyboardState.isShift ? shift : key;
+                }
+                
+                // Only update keys that represent a single character, not special keys like SPACE
+                if (key.length === 1 || shift) { 
+                    keyElement.textContent = displayChar;
+                }
+            });
+        }
+
+
+        window.onload = renderKeyboard;
+
+
+        // --- Profile Modal Logic (NEW) ---
+
+        /**
+         * Fetches and displays the target user's sketches.
+         */
+        const fetchUserSketches = async (targetUserId, appId) => {
+            profileSketches.innerHTML = '';
+            profileSketchesLoading.classList.remove('hidden');
+            const db = window.db;
+            const q = query(collection(db, `artifacts/${appId}/public/data/sketches`), 
+                            where("userId", "==", targetUserId), 
+                            orderBy("timestamp", "desc"));
+            
+            try {
+                const snapshot = await getDocs(q);
+                sketchCount.textContent = snapshot.size;
+                if (snapshot.empty) {
+                    profileSketches.innerHTML = '<p class="text-center text-gray-500 col-span-full">N0 5K3TCH35 Y3T.</p>';
+                    return;
+                }
+
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    const sketchCard = document.createElement('div');
+                    sketchCard.className = 'tool-card p-1 rounded-md';
+                    sketchCard.innerHTML = `
+                        <img src="${data.imageUrl}" alt="User Sketch" class="w-full h-auto object-cover rounded-sm">
+                        <div class="text-xs mt-1 text-center">${data.likes ? data.likes.length : 0} L0V3S</div>
+                    `;
+                    profileSketches.appendChild(sketchCard);
+                });
+            } catch (e) {
+                console.error("Error fetching user sketches:", e);
+                profileSketches.innerHTML = '<p class="text-center text-red-500 col-span-full">3RROR L04D1NG.</p>';
+                sketchCount.textContent = '??';
+            } finally {
+                profileSketchesLoading.classList.add('hidden');
+            }
+        };
+
+        /**
+         * Fetches and displays the list of users the target user is following.
+         */
+        const fetchUserFollowing = async (targetUserId, appId) => {
+            profileFollowingList.innerHTML = '';
+            profileFollowingLoading.classList.remove('hidden');
+            const db = window.db;
+            
+            // Query the target user's 'following' subcollection
+            const followingRef = collection(db, `artifacts/${appId}/users/${targetUserId}/following`);
+
+            try {
+                const snapshot = await getDocs(followingRef);
+                followingCount.textContent = snapshot.size;
+                
+                if (snapshot.empty) {
+                    profileFollowingList.innerHTML = '<span class="text-gray-500">N0T F0LL0W1NG 4NY0N3.</span>';
+                    return;
+                }
+
+                snapshot.forEach(doc => {
+                    const followedId = doc.id;
+                    const idElement = document.createElement('span');
+                    idElement.className = 'bg-gray-800 p-1 rounded-md font-mono text-xs cursor-pointer hover:bg-neon-blue hover:text-black';
+                    idElement.textContent = `ID: ${followedId.substring(0, 5)}...`;
+                    
+                    // Allow clicking on followed ID to view their profile (temporary name construction)
+                    idElement.addEventListener('click', () => {
+                        window.openProfile(followedId, `USER-${followedId.substring(0, 5)}`); 
+                    });
+                    
+                    profileFollowingList.appendChild(idElement);
+                });
+
+            } catch (e) {
+                console.error("Error fetching user following:", e);
+                profileFollowingList.innerHTML = '<span class="text-red-500">3RROR L04D1NG.</span>';
+                followingCount.textContent = '??';
+            } finally {
+                profileFollowingLoading.classList.add('hidden');
+            }
+        };
+
+
+        /**
+         * Opens the profile modal and loads content for the target user.
+         */
+        window.openProfile = (targetUserId, targetName) => {
+            playInteractionSound(1100);
+            
+            profileDisplayName.textContent = `${targetName}'s`;
+            profileUserId.textContent = `${targetUserId}`;
+            
+            profileModal.classList.remove('hidden');
+            profileModal.classList.add('flex');
+            
+            const appId = window.firebase.getAppId();
+            fetchUserSketches(targetUserId, appId);
+            fetchUserFollowing(targetUserId, appId);
+        };
+
+        closeProfileButton.addEventListener('click', () => {
+            playInteractionSound(300);
+            profileModal.classList.remove('flex');
+            profileModal.classList.add('hidden');
+        });
+
+
+        // --- Chat Firestore Logic ---
+
+        /**
+         * Generates a consistent chatId from two user IDs (sorted).
+         */
+        const getChatId = (user1Id, user2Id) => {
+            return [user1Id, user2Id].sort().join('_');
+        };
+
+        /**
+         * Sends a message to the active chat.
+         */
+        const sendMessage = async (messageText) => {
+            playInteractionSound(1500);
+            const db = window.db;
+            const appId = window.firebase.getAppId();
+            const senderId = window.firebase.getUserId();
+            const senderName = window.firebase.getDisplayName();
+
+            const text = messageText.trim();
+            if (!text || !activeChat.chatId) return;
+
+            // Clear input after sending
+            chatInput.value = '';
+
+            try {
+                const messagesRef = collection(db, `artifacts/${appId}/public/data/chats/${activeChat.chatId}/messages`);
+                await addDoc(messagesRef, {
+                    senderId: senderId,
+                    senderName: senderName,
+                    text: text,
+                    timestamp: new Date()
+                });
+            } catch (e) {
+                console.error("Error sending message:", e);
+            }
+        };
+
+        /**
+         * Sets up real-time listener for messages in the active chat.
+         */
+        const setupMessageListener = (chatId) => {
+            if (unsubscribeChat) {
+                unsubscribeChat(); // Stop previous listener
+            }
+
+            const db = window.db;
+            const appId = window.firebase.getAppId();
+            const messagesRef = collection(db, `artifacts/${appId}/public/data/chats/${chatId}/messages`);
+            const q = query(messagesRef, orderBy("timestamp", "asc"));
+
+            unsubscribeChat = onSnapshot(q, (snapshot) => {
+                messageList.innerHTML = '';
+                const currentUserId = window.firebase.getUserId();
+
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    const isMine = data.senderId === currentUserId;
+                    const bubbleClass = isMine ? 'message-mine' : 'message-theirs';
+                    
+                    const messageElement = document.createElement('div');
+                    messageElement.className = `message-bubble ${bubbleClass}`;
+                    messageElement.innerHTML = `
+                        <div class="text-xs font-bold ${isMine ? 'text-white' : 'text-black'}">${isMine ? 'Y0U' : data.senderName}</div>
+                        <p class="text-sm break-words">${data.text}</p>
+                    `;
+                    messageList.appendChild(messageElement);
+                });
+
+                // Scroll to the bottom of the message list
+                messageList.scrollTop = messageList.scrollHeight;
+
+            }, (error) => {
+                console.error("Error fetching messages:", error);
+            });
+        };
+
+        /**
+         * Opens the chat modal and initializes the chat listener.
+         */
+        window.openChat = (recipientId, recipientName) => {
+            playInteractionSound(1100);
+            const currentUserId = window.firebase.getUserId();
+
+            if (recipientId === currentUserId) return; // Cannot chat with self
+
+            activeChat.chatId = getChatId(currentUserId, recipientId);
+            activeChat.recipientId = recipientId;
+            activeChat.recipientName = recipientName;
+
+            chatRecipientName.textContent = recipientName;
+            chatModal.classList.remove('hidden');
+            chatModal.classList.add('flex');
+
+            setupMessageListener(activeChat.chatId);
+        };
+
+        closeChatButton.addEventListener('click', () => {
+            playInteractionSound(300);
+            chatModal.classList.remove('flex');
+            chatModal.classList.add('hidden');
+            if (unsubscribeChat) {
+                unsubscribeChat(); // Stop listener when closing
+                unsubscribeChat = null;
+            }
+            chatInput.value = ''; // Clear input on close
+            messageList.innerHTML = '';
+        });
+
+
+        // --- Authentication and UI Updates ---
+        window.updateAuthStatus = (displayName, userId) => {
+            authDisplayName.textContent = displayName || 'GUEST.USER';
+            authUserId.textContent = `ID: ${userId}`;
+            // Load keyboard color after successful authentication
+            loadKeyboardColor(userId, window.firebase.getAppId());
+        };
+        // ... (remaining auth functions are the same as before)
+        window.showDisplayNameModal = () => {
+            nameModal.classList.remove('hidden'); nameModal.classList.add('flex');
+            displayNameInput.value = window.firebase.getDisplayName().startsWith('USER-') ? '' : window.firebase.getDisplayName();
+        };
+        saveDisplayNameButton.addEventListener('click', async () => {
+            const newName = displayNameInput.value.trim().substring(0, 20);
+            if (newName.length >= 3) {
+                try {
+                    await window.firebase.updateDisplayName(newName);
+                    nameModal.classList.remove('flex'); nameModal.classList.add('hidden'); playInteractionSound(1500);
+                } catch (e) {
+                    console.error("Failed to update display name:", e);
+                }
+            } else {
+                displayNameInput.placeholder = "MUST BE 3+ CHARS"; playInteractionSound(300);
+            }
+        });
+        openNameModalButton.addEventListener('click', () => { playInteractionSound(1000); window.showDisplayNameModal(); });
+
+
+        // --- History Management ---
+        function updateHistoryButtons() {
+            undoButton.disabled = undoStack.length <= 1; undoButton.classList.toggle('opacity-50', undoButton.disabled);
+            redoButton.disabled = redoStack.length === 0; redoButton.classList.toggle('opacity-50', redoButton.disabled);
+        }
+        function restoreState(imageData) { ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.putImageData(imageData, 0, 0); updateHistoryButtons(); }
+        function saveState() {
+            if (canvas.width === 0 || canvas.height === 0) return;
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            undoStack.push(imageData);
+            if (undoStack.length > MAX_HISTORY) { undoStack.shift(); }
+            redoStack = []; 
+            updateHistoryButtons();
+        }
+        function undo() { if (undoStack.length > 1) { playInteractionSound(500); redoStack.push(undoStack.pop()); restoreState(undoStack[undoStack.length - 1]); } }
+        function redo() { if (redoStack.length > 0) { playInteractionSound(550); undoStack.push(redoStack.pop()); restoreState(undoStack[undoStack.length - 1]); } }
+        undoButton.addEventListener('click', undo);
+        redoButton.addEventListener('click', redo);
+
+
+        // --- Canvas Initialization and Resizing ---
+        function resizeCanvas() {
+            const canvasContainer = canvas.parentNode;
+            const displayWidth = canvasContainer.clientWidth - 40; 
+            const displayHeight = canvasContainer.clientHeight - 40;
+            canvas.width = LOW_RES_WIDTH; canvas.height = LOW_RES_HEIGHT;
+            canvas.style.width = `${displayWidth}px`; canvas.style.height = `${displayHeight}px`;
+            scaleX = LOW_RES_WIDTH / displayWidth; scaleY = LOW_RES_HEIGHT / displayHeight;
+            ctx.imageSmoothingEnabled = false; ctx.fillStyle = canvasBgColor; 
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            undoStack = []; redoStack = []; setTimeout(saveState, 50); 
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+
+        // --- Drawing Logic ---
+        function startDrawing(x, y) { if (isDrawing) return; isDrawing = true; [lastX, lastY] = [x, y]; playDrawStartSound(); }
+        function draw(x, y) {
+            if (!isDrawing) return;
+            let drawX = x; let drawY = y; let effectiveColor = currentColor;
+            let effectiveSize = currentBrushSize; let effectiveAlpha = 1.0; let effectiveShadow = 0;
+            ctx.globalCompositeOperation = 'source-over'; 
+            if (currentDrawingMode === 'erase') {
+                effectiveColor = canvasBgColor; effectiveAlpha = 1.0; effectiveShadow = 0;
+            } else if (currentDrawingMode === 'glitch_pen') {
+                const jitter = GLITCH_JITTER; 
+                drawX = x + Math.floor(Math.random() * (jitter * 2 + 1)) - jitter;
+                drawY = y + Math.floor(Math.random() * (jitter * 2 + 1)) - jitter;
+                effectiveSize = 2; effectiveAlpha = 1.0; effectiveShadow = 0; effectiveColor = currentColor;
+            } else if (currentDrawingMode === 'blend') {
+                ctx.globalCompositeOperation = 'lighter'; effectiveAlpha = 0.8; effectiveSize = currentBrushSize; effectiveShadow = 4; effectiveColor = currentColor;
+            } 
+
+            ctx.strokeStyle = effectiveColor; ctx.lineWidth = effectiveSize;
+            ctx.lineCap = currentLineCap; ctx.globalAlpha = effectiveAlpha;
+            ctx.shadowBlur = effectiveShadow;
+            
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY); ctx.lineTo(drawX, drawY); ctx.stroke();
+            [lastX, lastY] = [drawX, drawY];
+        }
+
+        function stopDrawing() {
+            if (!isDrawing) return; isDrawing = false;
+            ctx.globalAlpha = 1.0; ctx.shadowBlur = 0;
+            ctx.globalCompositeOperation = 'source-over'; saveState(); 
+        }
+
+        const getCoords = (e) => {
+            const rect = canvas.getBoundingClientRect();
+            let clientX, clientY;
+            if (e.touches && e.touches.length > 0) {
+                const touch = e.touches[0]; clientX = touch.clientX; clientY = touch.clientY;
+            } else { clientX = e.clientX; clientY = e.clientY; }
+            const x = (clientX - rect.left) * scaleX;
+            const y = (clientY - rect.top) * scaleY;
+            return { x: Math.floor(x), y: Math.floor(y) };
+        };
+
+        canvas.addEventListener('mousedown', (e) => { const { x, y } = getCoords(e); startDrawing(x, y); });
+        canvas.addEventListener('mousemove', (e) => { const { x, y } = getCoords(e); draw(x, y); });
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('mouseout', stopDrawing);
+        canvas.addEventListener('touchstart', (e) => { e.preventDefault(); const { x, y } = getCoords(e); startDrawing(x, y); });
+        canvas.addEventListener('touchmove', (e) => { e.preventDefault(); const { x, y } = getCoords(e); draw(x, y); });
+        canvas.addEventListener('touchend', stopDrawing);
+
+        // --- Tool & Color Handlers ---
+        sizeSlider.addEventListener('input', (e) => { currentBrushSize = parseInt(e.target.value); currentSizeDisplay.textContent = currentBrushSize; playInteractionSound(900); });
+        brushTools.forEach(button => {
+            button.addEventListener('click', (e) => {
+                playInteractionSound(600);
+                const newSize = parseInt(e.target.dataset.size);
+                currentLineCap = e.target.dataset.cap;
+                currentDrawingMode = e.target.dataset.mode;
+                currentBrushSize = newSize;
+                sizeSlider.value = newSize;
+                currentSizeDisplay.textContent = newSize;
+                brushTools.forEach(btn => btn.classList.remove('active'));
+                e.target.classList.add('active');
+            });
+        });
+        colorPicker.addEventListener('input', (e) => { playInteractionSound(1000); currentColor = e.target.value; });
+        clearButton.addEventListener('click', () => { playInteractionSound(440); resizeCanvas(); });
+        musicToggleButton.addEventListener('click', () => { playInteractionSound(750); if (Tone.Transport.state === 'started') { stopAmbientMusic(); } else { startAmbientMusic(); } });
+
+        // --- Music Functions ---
+        function startAmbientMusic() {
+            const chords = [["C4", "Eb4", "G4", "Bb4"], ["F4", "Ab4", "C5", "Eb5"], ["G4", "Bb4", "D5", "F5"]];
+            let chordIndex = 0;
+            bgLoop = new Tone.Loop(time => {
+                const chord = chords[chordIndex % chords.length];
+                bgSynth.triggerAttackRelease(chord, "2n", time, 0.5); 
+                chordIndex++;
+            }, "2n").start(0);
+            Tone.Transport.start();
+            musicStatus.textContent = "▶️ 4MBI3NT 0N";
+            musicToggleButton.classList.remove('bg-red-500'); musicToggleButton.classList.add('bg-green-500');
+        }
+        function stopAmbientMusic() {
+            if (bgLoop) { bgLoop.stop(); Tone.Transport.stop(); }
+            musicStatus.textContent = "⏸️ 4MBI3NT 0FF";
+            musicToggleButton.classList.remove('bg-green-500'); musicToggleButton.classList.add('bg-red-500');
+        }
+        function playDrawStartSound() { if (Tone.context.state === 'running') { synth.triggerAttackRelease("C2", "8n"); } }
+        document.body.addEventListener('click', () => {
+            if (Tone.context.state !== 'running') { Tone.start().then(startAmbientMusic); }
+        }, { once: true });
+
+
+        // --- Custom Audio Handling ---
+        const cdButton = document.getElementById('cd-button');
+        const audioUpload = document.getElementById('audioUpload');
+        const cdText = document.getElementById('cd-text');
+
+        audioUpload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file && file.type.startsWith('audio/')) {
+                playInteractionSound(700); 
+                const fileURL = URL.createObjectURL(file);
+                bgMusic.src = fileURL;
+                if (Tone.Transport.state === 'started') { stopAmbientMusic(); }
+                bgMusic.play().catch(error => { console.error("Audio playback failed:", error); cdText.textContent = "CLK 2 PL4Y"; });
+                cdText.textContent = "PL4YING"; cdButton.style.backgroundColor = 'var(--neon-purple)'; 
+            } else {
+                playInteractionSound(200); console.error('ERROR: 0NLY 4UDI0 FIL3S 5UPP0RTED.'); e.target.value = null; 
+            }
+        });
+
+        cdButton.addEventListener('click', (e) => {
+            if (bgMusic.src) {
+                playInteractionSound(800);
+                if (bgMusic.paused) {
+                    if (Tone.Transport.state === 'started') { stopAmbientMusic(); }
+                    bgMusic.play(); cdText.textContent = "P4U5ED";
+                } else {
+                    bgMusic.pause(); cdText.textContent = "P4U5ED";
+                }
+            }
+        });
+
+        // --- Follow/Like Logic ---
+        const toggleFollow = async (followedUserId, isFollowing) => {
+            playInteractionSound(isFollowing ? 750 : 1200);
+            const db = window.db; const currentUserId = window.firebase.getUserId(); const appId = window.firebase.getAppId();
+            if (followedUserId === currentUserId) return;
+            const docRef = doc(db, `artifacts/${appId}/users/${currentUserId}/following`, followedUserId);
+            try {
+                if (isFollowing) { await deleteDoc(docRef); } else { await setDoc(docRef, { followedAt: new Date(), followedUserId: followedUserId }); }
+            } catch (e) { console.error(`Error toggling follow for ${followedUserId}:`, e); }
+        };
+
+        const setupFollowingListener = (appId, currentUserId) => {
+            const db = window.db;
+            const followingRef = collection(db, `artifacts/${appId}/users/${currentUserId}/following`);
+            
+            onSnapshot(followingRef, (snapshot) => {
+                userFollowing.clear();
+                snapshot.forEach(doc => { userFollowing.add(doc.id); });
+            }, (error) => { console.error("Error fetching following list:", error); });
+        }
+        
+        saveGalleryButton.addEventListener('click', async () => {
+            playInteractionSound(1400);
+            const imageUrl = canvas.toDataURL('image/png');
+            const userId = window.firebase.getUserId();
+            const displayName = window.firebase.getDisplayName();
+            const appId = window.firebase.getAppId();
+
+            if (!userId) { console.error("User not authenticated."); return; }
+            if (displayName.startsWith('USER-')) { window.showDisplayNameModal(); return; }
+
+            try {
+                const db = window.db;
+                await addDoc(collection(db, `artifacts/${appId}/public/data/sketches`), {
+                    userId: userId, displayName: displayName, timestamp: new Date(), imageUrl: imageUrl, likes: [],
+                });
+            } catch (e) { console.error("Error saving art:", e); }
+        });
+
+        const toggleLike = async (docId) => {
+            playInteractionSound(850);
+            const db = window.db;
+            const userId = window.firebase.getUserId();
+            const appId = window.firebase.getAppId();
+            const docRef = doc(db, `artifacts/${appId}/public/data/sketches/${docId}`);
+
+            if (!userId) { return; } 
+
+            try {
+                await runTransaction(db, async (transaction) => {
+                    const sfDoc = await transaction.get(docRef);
+                    if (!sfDoc.exists()) { throw "Document does not exist!"; }
+                    const currentLikes = sfDoc.data().likes || [];
+                    const isLiked = currentLikes.includes(userId);
+
+                    if (isLiked) {
+                        transaction.update(docRef, { likes: arrayRemove(userId) });
+                    } else {
+                        transaction.update(docRef, { likes: arrayUnion(userId) });
+                    }
+                });
+            } catch (e) { console.error("Transaction failed: ", e); }
+        };
+
+
+        /**
+         * Sets up the real-time listener for the public gallery feed AND the following status.
+         */
+        window.setupGalleryAndFollowingListener = (appId, currentUserId) => {
+            const db = window.db;
+            setupFollowingListener(appId, currentUserId); 
+            
+            const sketchesRef = collection(db, `artifacts/${appId}/public/data/sketches`);
+            const q = query(sketchesRef, orderBy("timestamp", "desc"));
+
+            onSnapshot(q, (snapshot) => {
+                galleryFeed.innerHTML = '';
+                
+                if (snapshot.empty) {
+                    galleryFeed.innerHTML = '<p class="col-span-full text-center text-lg text-white">N0 4RT F0UND. B3 TH3 F1RST T0 UPL04D.</p>';
+                    return;
+                }
+
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    const docId = doc.id;
+                    const sketchUserId = data.userId;
+                    const sketchDisplayName = data.displayName || 'Anon';
+                    const likesCount = data.likes ? data.likes.length : 0;
+                    const isLiked = data.likes && data.likes.includes(currentUserId);
+                    const timestamp = data.timestamp ? new Date(data.timestamp.toDate()).toLocaleDateString() : 'UNKNOWN';
+                    
+                    const isFollowing = userFollowing.has(sketchUserId);
+                    const isSelf = sketchUserId === currentUserId;
+                    const followButtonClass = isFollowing ? 'bg-red-700 hover:bg-red-800' : 'bg-purple-700 hover:bg-purple-800';
+                    const followButtonText = isFollowing ? 'UNF0LL0W' : 'F0LL0W';
+
+                    // --- UPDATED: WRAP DISPLAY NAME IN CLICKABLE SPAN ---
+                    const displayNameHtml = `
+                        <span class="text-sm font-bold cursor-pointer hover:text-yellow-400" 
+                              data-target-user-id="${sketchUserId}" 
+                              data-target-name="${sketchDisplayName}"
+                              onclick="window.openProfile('${sketchUserId}', '${sketchDisplayName}')">
+                              ${sketchDisplayName}
+                        </span>`;
+
+                    // Message and Follow Button HTML
+                    const socialHtml = isSelf ? 
+                        `<span class="text-xs text-neon-pink p-1 rounded-md border-2 border-neon-pink">Y0U (S3LF)</span>` :
+                        `<button class="message-toggle flex items-center text-xs font-bold tool-card p-2 rounded-md bg-blue-700 hover:bg-blue-800" 
+                            data-target-user-id="${sketchUserId}" 
+                            data-target-name="${sketchDisplayName}">
+                            M3SS4G3
+                        </button>
+                        <button class="follow-toggle flex items-center text-xs font-bold tool-card p-2 rounded-md ${followButtonClass}" 
+                            data-target-user-id="${sketchUserId}" 
+                            data-is-following="${isFollowing}">
+                            ${followButtonText}
+                        </button>`;
+
+
+                    // Create the gallery card element
+                    const card = document.createElement('div');
+                    card.className = 'gallery-card p-2 rounded-lg';
+                    card.innerHTML = `
+                        <img src="${data.imageUrl}" alt="User Sketch" class="gallery-image rounded-md mb-2">
+                        <!-- USE UPDATED DISPLAY NAME HTML HERE -->
+                        <div class="text-xs text-gray-300 mb-1">BY: ${displayNameHtml} | ${timestamp}</div>
+                        <div class="flex flex-col gap-2">
+                            <div class="flex justify-between items-center mb-2">
+                                <span class="text-xs text-gray-400">ID: ${sketchUserId.substring(0, 5)}...</span>
+                            </div>
+                            <div class="flex gap-2 justify-end">
+                                ${socialHtml}
+                            </div>
+                            <button class="like-button flex-1 flex items-center justify-center text-sm font-bold tool-card p-2 rounded-md" 
+                                data-doc-id="${docId}" 
+                                style="color: ${isLiked ? 'var(--neon-pink)' : 'var(--neon-blue)'}; border-color: ${isLiked ? 'var(--neon-pink)' : 'var(--neon-blue)'};">
+                                ${isLiked ? '💖' : '❤️'} L0V3 <span class="ml-2">(${likesCount})</span>
+                            </button>
+                        </div>
+                    `;
+                    
+                    // Attach event listeners for LIKE and FOLLOW
+                    const likeButton = card.querySelector('.like-button');
+                    if (likeButton) { likeButton.addEventListener('click', () => toggleLike(docId)); }
+
+                    const followButton = card.querySelector('.follow-toggle');
+                    if (followButton) {
+                        followButton.addEventListener('click', (e) => {
+                            const targetId = e.currentTarget.dataset.targetUserId;
+                            const currentlyFollowing = e.currentTarget.dataset.isFollowing === 'true';
+                            toggleFollow(targetId, currentlyFollowing);
+                        });
+                    }
+
+                    // Attach event listener for MESSAGE
+                    const messageButton = card.querySelector('.message-toggle');
+                    if (messageButton) {
+                        messageButton.addEventListener('click', (e) => {
+                            const targetId = e.currentTarget.dataset.targetUserId;
+                            const targetName = e.currentTarget.dataset.targetName;
+                            window.openChat(targetId, targetName);
+                        });
+                    }
+
+                    galleryFeed.appendChild(card);
+                });
+            }, (error) => {
+                console.error("Error fetching gallery:", error);
+                galleryFeed.innerHTML = '<p class="col-span-full text-center text-lg text-red-500">C0NN3CTI0N F41L. CH3CK C0NS0L3.</p>';
+            });
+        };
+    </script>
+</body>
+</html>
